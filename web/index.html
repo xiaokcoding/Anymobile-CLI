@@ -1,0 +1,109 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta
+      name="viewport"
+      content="width=device-width, initial-scale=1.0, viewport-fit=cover"
+    />
+    <title>Claude Remote — mobile-ssh</title>
+
+    <!-- PWA: installable, opens standalone from the home screen. -->
+    <link rel="manifest" href="/manifest.webmanifest" />
+    <meta name="theme-color" content="#1e1e1e" />
+    <!-- iOS add-to-home-screen hints (Web Push on iOS requires a home-screen PWA). -->
+    <meta name="apple-mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+    <meta name="apple-mobile-web-app-title" content="Claude Remote" />
+    <link rel="apple-touch-icon" href="/icons/icon-192.png" />
+
+    <style>
+      html,
+      body {
+        margin: 0;
+        height: 100%;
+        background: #1e1e1e;
+        /* Disable the iOS pull-to-refresh / rubber-banding that fights a full-height terminal. */
+        overscroll-behavior: none;
+      }
+      /* Column layout: terminal fills the space, input bar sticks to the bottom. */
+      #app {
+        display: flex;
+        flex-direction: column;
+        height: 100vh;
+        /* Use the dynamic viewport unit where supported so the input bar isn't
+           hidden behind the mobile URL bar / on-screen keyboard. Falls back to
+           100vh above. */
+        height: 100dvh;
+      }
+      #terminal {
+        flex: 1 1 auto;
+        min-height: 0; /* allow the flex child to shrink instead of overflowing */
+        padding: 4px;
+        box-sizing: border-box;
+      }
+      /* Mobile input bar: a text field + send button, pinned to the bottom and
+         lifted above the iOS home indicator via the safe-area inset. */
+      #input-bar {
+        flex: 0 0 auto;
+        display: flex;
+        gap: 8px;
+        padding: 8px;
+        padding-bottom: calc(8px + env(safe-area-inset-bottom, 0px));
+        background: #252526;
+        border-top: 1px solid #333;
+        box-sizing: border-box;
+      }
+      #prompt-input {
+        flex: 1 1 auto;
+        min-width: 0;
+        resize: none;
+        font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+        font-size: 16px; /* >=16px stops iOS Safari from zooming on focus */
+        line-height: 1.4;
+        color: #e0e0e0;
+        background: #1e1e1e;
+        border: 1px solid #3c3c3c;
+        border-radius: 6px;
+        padding: 8px 10px;
+        box-sizing: border-box;
+      }
+      #prompt-input:focus {
+        outline: none;
+        border-color: #0e639c;
+      }
+      #send-btn {
+        flex: 0 0 auto;
+        font-size: 15px;
+        color: #fff;
+        background: #0e639c;
+        border: none;
+        border-radius: 6px;
+        padding: 0 16px;
+        cursor: pointer;
+      }
+      #send-btn:active {
+        background: #1177bb;
+      }
+    </style>
+  </head>
+  <body>
+    <div id="app">
+      <div id="terminal"></div>
+      <div id="input-bar">
+        <textarea
+          id="prompt-input"
+          rows="1"
+          autocapitalize="off"
+          autocomplete="off"
+          autocorrect="off"
+          spellcheck="false"
+          placeholder="Type a prompt, Enter to send (Shift+Enter = newline)"
+          aria-label="Prompt input"
+        ></textarea>
+        <button id="send-btn" type="button">Send</button>
+      </div>
+    </div>
+    <script type="module" src="/src/main.ts"></script>
+  </body>
+</html>

@@ -1,0 +1,27 @@
+{
+  "name": "mobile-ssh",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Mobile remote control for Claude Code (cc) — route ① terminal mirror over a Windows-native node-pty bridge + xterm.js PWA. See .trellis/tasks/06-01-mobile-remote-control-app-for-claude-code-mvp/prd.md",
+  "engines": { "node": ">=18" },
+  "scripts": {
+    "typecheck": "pnpm -r typecheck",
+    "lint": "eslint .",
+    "build": "pnpm -r build",
+    "test": "pnpm -r test",
+    "dev:bridge": "pnpm --filter @mobile-ssh/bridge dev",
+    "dev:web": "pnpm --filter @mobile-ssh/web dev"
+  },
+  "devDependencies": {
+    "@eslint/js": "^9.17.0",
+    "@types/node": "^22.10.2",
+    "eslint": "^9.17.0",
+    "globals": "^15.14.0",
+    "typescript": "^5.7.2",
+    "typescript-eslint": "^8.18.1"
+  },
+  "pnpm": {
+    "onlyBuiltDependencies": ["esbuild", "node-pty"]
+  }
+}

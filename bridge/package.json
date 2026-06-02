@@ -1,0 +1,21 @@
+{
+  "name": "@mobile-ssh/bridge",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Windows-native node-pty(ConPTY) bridge: holds claude's persistent PTY + scrollback, mirrors it over WebSocket, and hosts the approval/notification hook endpoints.",
+  "scripts": {
+    "dev": "tsx watch src/index.ts",
+    "start": "tsx src/index.ts",
+    "typecheck": "tsc --noEmit",
+    "test": "tsx --test --test-force-exit \"src/**/*.test.ts\""
+  },
+  "dependencies": {
+    "node-pty": "^1.1.0",
+    "ws": "^8.18.0"
+  },
+  "devDependencies": {
+    "@types/ws": "^8.5.13",
+    "tsx": "^4.19.2"
+  }
+}
