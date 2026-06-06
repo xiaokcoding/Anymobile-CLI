@@ -1,0 +1,51 @@
+{
+  "//": "EXAMPLE hook config for mobile-ssh — NOT a live settings file. Do NOT put this in this repo's .claude/settings.json (that holds the Trellis workflow hooks, and the cc you remote-control runs under a DIFFERENT project at BRIDGE_CWD). Copy the `hooks` block below into the .claude/settings.json of the TARGET project you let Claude work in (the one you pass as BRIDGE_CWD), or into your machine-wide ~/.claude/settings.json. See README §PR4. The cc you remote-control and the bridge run on the SAME machine, so the URLs are loopback (http://127.0.0.1:<BRIDGE_PORT>) — loopback is correct here and opens no public port.",
+
+  "//timeout": "The 300s hook timeout is the cap on how long cc waits; the bridge answers first via APPROVAL_TIMEOUT_MS (default 280s) with the fail-closed default (deny). Keep 300 > APPROVAL_TIMEOUT_MS.",
+  "//auth": "Authorization: Bearer $BRIDGE_TOKEN must match the bridge's BRIDGE_TOKEN env. allowedEnvVars lets cc interpolate $BRIDGE_TOKEN from the environment (it must be set in the shell that launches cc).",
+  "//schema": "PreToolUse http-hook input/response schema is per the cc docs but evolves; confirm with `claude --debug` for your installed cc version (research/claude-code-hooks-approval.md Caveats). The bridge parses input defensively and replies with hookSpecificOutput.permissionDecision.",
+
+  "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "*",
+        "hooks": [
+          {
+            "type": "http",
+            "url": "http://127.0.0.1:8866/hooks/pre-tool-use",
+            "timeout": 300,
+            "headers": { "Authorization": "Bearer $BRIDGE_TOKEN" },
+            "allowedEnvVars": ["BRIDGE_TOKEN"]
+          }
+        ]
+      }
+    ],
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "type": "http",
+            "url": "http://127.0.0.1:8866/hooks/stop",
+            "timeout": 30,
+            "headers": { "Authorization": "Bearer $BRIDGE_TOKEN" },
+            "allowedEnvVars": ["BRIDGE_TOKEN"]
+          }
+        ]
+      }
+    ],
+    "Notification": [
+      {
+        "//": "OPTIONAL: notify-only pushes for idle/permission prompts. Safe to omit — PreToolUse already pushes for approvals.",
+        "hooks": [
+          {
+            "type": "http",
+            "url": "http://127.0.0.1:8866/hooks/notification",
+            "timeout": 30,
+            "headers": { "Authorization": "Bearer $BRIDGE_TOKEN" },
+            "allowedEnvVars": ["BRIDGE_TOKEN"]
+          }
+        ]
+      }
+    ]
+  }
+}

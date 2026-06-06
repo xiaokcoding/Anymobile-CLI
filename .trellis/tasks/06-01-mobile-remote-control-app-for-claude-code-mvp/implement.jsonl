@@ -1,3 +1,4 @@
 {"file": ".trellis/tasks/06-01-mobile-remote-control-app-for-claude-code-mvp/research/windows-pty-terminal-bridge.md", "reason": "Windows node-pty/ConPTY PTY 桥、持久会话与重连补流、可抄实现与三大坑"}
 {"file": ".trellis/tasks/06-01-mobile-remote-control-app-for-claude-code-mvp/research/claude-code-hooks-approval.md", "reason": "cc PreToolUse(type:http) 远程审批接口、Notification/Stop hook、Windows hook 配置、订阅鉴权"}
 {"file": ".trellis/tasks/06-01-mobile-remote-control-app-for-claude-code-mvp/research/pwa-tailscale-webpush.md", "reason": "tailscale serve HTTPS 安全上下文、Web Push 矩阵、ntfy 通知选型"}
+{"file": ".trellis/spec/backend/bridge-serving.md", "reason": "PR4 的 /hooks/* /approvals/* 路由必须挂在同一 http.Server 上、static 之前；不得回退 127.0.0.1-only/防穿越/sw no-cache/单 origin 契约"}

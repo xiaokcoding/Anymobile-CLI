@@ -5,7 +5,8 @@
  * shared lib in the MVP). If this drifts from the bridge, the terminal mirror
  * breaks — keep the two `type` unions, the shared constants, and the field
  * shapes in sync. See bridge/src/protocol.ts for the full PR2 reconnect/replay +
- * heartbeat contract.
+ * heartbeat contract and the PR4 approval frames
+ * (`approval_request`/`approval_resolved` down, `approval_decision` up).
  */
 
 /** WebSocket close codes (wootty contract, research §4). */
@@ -30,17 +31,23 @@ export const Backoff = {
   maxMs: 5_000,
 } as const;
 
+/** A permission decision the human (or a timeout) returns for a tool request. */
+export type ApprovalDecision = "allow" | "deny" | "ask";
+
 export type ServerMessage =
   | { type: "ready"; cols: number; rows: number; lastSeq: number; alive: boolean; truncated: boolean }
   | { type: "output"; seq: number; data: string }
   | { type: "exit"; code: number; signal: number | undefined }
-  | { type: "pong" };
+  | { type: "pong" }
+  | { type: "approval_request"; id: string; toolName: string; toolInput: string; createdAt: number }
+  | { type: "approval_resolved"; id: string; decision: ApprovalDecision };
 
 export type ClientMessage =
   | { type: "attach"; lastSeq: number }
   | { type: "input"; data: string }
   | { type: "resize"; cols: number; rows: number }
-  | { type: "ping" };
+  | { type: "ping" }
+  | { type: "approval_decision"; id: string; decision: ApprovalDecision };
 
 export function parseServerMessage(raw: string): ServerMessage | null {
   let value: unknown;
@@ -77,6 +84,23 @@ export function parseServerMessage(raw: string): ServerMessage | null {
         : null;
     case "pong":
       return { type: "pong" };
+    case "approval_request":
+      return typeof msg.id === "string" &&
+        typeof msg.toolName === "string" &&
+        typeof msg.toolInput === "string" &&
+        typeof msg.createdAt === "number"
+        ? {
+            type: "approval_request",
+            id: msg.id,
+            toolName: msg.toolName,
+            toolInput: msg.toolInput,
+            createdAt: msg.createdAt,
+          }
+        : null;
+    case "approval_resolved":
+      return typeof msg.id === "string" && isApprovalDecision(msg.decision)
+        ? { type: "approval_resolved", id: msg.id, decision: msg.decision }
+        : null;
     default:
       return null;
   }
@@ -84,4 +108,8 @@ export function parseServerMessage(raw: string): ServerMessage | null {
 
 export function serializeClientMessage(msg: ClientMessage): string {
   return JSON.stringify(msg);
+}
+
+function isApprovalDecision(value: unknown): value is ApprovalDecision {
+  return value === "allow" || value === "deny" || value === "ask";
 }

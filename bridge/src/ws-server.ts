@@ -5,7 +5,19 @@
  * WebSocketServer is attached to that http.Server so ws Upgrade requests share
  * the port. Distinguished by the `Upgrade` header, so one
  * `tailscale serve --bg <port>` fronts the whole origin and the client's
- * same-origin `wss://<host>` works (web/src/main.ts resolveBridgeUrl).
+ * same-origin `wss://<host>` (web/src/main.ts resolveBridgeUrl) just works.
+ *
+ * PR4 adds, on the SAME http.Server (single origin, .trellis/spec/backend/
+ * bridge-serving.md):
+ *   - ws handshake auth: the Upgrade query must carry `?token=<BRIDGE_TOKEN>`
+ *     (capability URL). A missing/wrong token is rejected at `verifyClient`.
+ *     Loopback is NOT auto-trusted — tailscale serve makes every request look
+ *     like loopback, so the token always gates access.
+ *   - HTTP API routes (cc hooks + ntfy callbacks) dispatched BEFORE the static
+ *     handler (api-server.ts), so static behaviour is unchanged.
+ *   - approval frames: a pending approval is broadcast as `approval_request`, and
+ *     its resolution (any channel) as `approval_resolved`. Clients reply with
+ *     `approval_decision` (already token-authed, no nonce).
  *
  * Connection lifecycle (PR2, wootty "Transport Lifecycle Contract", research §4):
  *   1. Client opens the socket and sends `attach{lastSeq}` as its first frame.
@@ -30,10 +42,12 @@
  * handshake.
  */
 
-import { createServer, type RequestListener, type Server } from "node:http";
+import { createServer, type RequestListener, type Server, type IncomingMessage } from "node:http";
 import { WebSocketServer, WebSocket } from "ws";
 import type { PtySession } from "./pty-session.js";
 import { createStaticHandler } from "./static-server.js";
+import { createApiHandler, summariseToolInput, type ApiHandlerOptions } from "./api-server.js";
+import { secureEqual } from "./secure-compare.js";
 import {
   parseClientMessage,
   serializeServerMessage,
@@ -41,6 +55,23 @@ import {
   Heartbeat,
   type ServerMessage,
 } from "./protocol.js";
+
+/**
+ * PR4 integration: the auth token, the approval registry, the ntfy client, and
+ * the approval base URL the API handlers need. Optional so PR1–PR3 tests can
+ * construct a TerminalServer without the approval stack (then there is NO token
+ * gate and NO API routes — ws-only / static-only as before).
+ */
+export interface ApprovalIntegration {
+  /** Shared secret for ws `?token=` AND cc hook `Authorization: Bearer`. */
+  readonly token: string;
+  /** Registry whose resolve events are broadcast as `approval_resolved`. */
+  readonly approvals: ApiHandlerOptions["approvals"];
+  /** ntfy client for outbound push. */
+  readonly ntfy: ApiHandlerOptions["ntfy"];
+  /** Public base URL for ntfy http-action callbacks (tailscale serve). */
+  readonly approvalBaseUrl: string | undefined;
+}
 
 export interface TerminalServerOptions {
   readonly port: number;
@@ -51,6 +82,12 @@ export interface TerminalServerOptions {
    * the ws. Omit to skip static serving (ws-only); tests pass undefined.
    */
   readonly webDist?: string;
+  /**
+   * PR4 approval/auth stack. When provided, the ws handshake requires
+   * `?token=`, and the cc hook + ntfy callback HTTP routes are mounted. When
+   * omitted (PR1–PR3 tests), there is no token gate and no API routes.
+   */
+  readonly approval?: ApprovalIntegration;
   /** Optional sink for the "dist missing" warning (defaults to console.warn). */
   readonly warn?: (message: string) => void;
 }
@@ -65,28 +102,59 @@ export class TerminalServer {
   private readonly host: string;
   private readonly port_: number;
   private detachExit: (() => void) | null = null;
+  private detachApprovalResolved: (() => void) | null = null;
+  private detachApprovalCreated: (() => void) | null = null;
+  /** PR4 approval registry, when the approval stack is wired (else null). */
+  private readonly approvals: ApprovalIntegration["approvals"] | null;
 
   constructor(session: PtySession, options: TerminalServerOptions) {
     this.session = session;
     this.host = options.host ?? "127.0.0.1";
     this.port_ = options.port;
 
-    // One http.Server hosts both the PWA (HTTP GET) and the ws (Upgrade). They
-    // share the port and are told apart by the `Upgrade` header, so a single
-    // `tailscale serve --bg <port>` fronts the whole origin (PR3). When no
-    // webDist is given (tests), static GETs just 404 — the ws path is unaffected.
+    const approval = options.approval;
+    this.approvals = approval?.approvals ?? null;
+
+    // PR4 HTTP API (cc hooks + ntfy callbacks) — mounted BEFORE static so its
+    // routes (POST /hooks/*, /approvals/*) are claimed first; everything else
+    // falls through to the static handler unchanged.
+    const api = approval
+      ? createApiHandler({
+          token: approval.token,
+          approvals: approval.approvals,
+          ntfy: approval.ntfy,
+          approvalBaseUrl: approval.approvalBaseUrl,
+          warn: options.warn,
+        })
+      : null;
+
+    // One http.Server hosts the PWA (HTTP GET), the PR4 API (POST), and the ws
+    // (Upgrade). They share the port and are told apart by the `Upgrade` header /
+    // path, so a single `tailscale serve --bg <port>` fronts the whole origin.
+    // When no webDist is given (tests), static GETs just 404 — ws/API unaffected.
     const staticHandler: RequestListener = options.webDist
       ? createStaticHandler({ webDist: options.webDist, warn: options.warn })
       : (_req, res) => {
           res.writeHead(404, { "Content-Type": "text/plain; charset=utf-8" });
           res.end("Not Found");
         };
-    this.http = createServer(staticHandler);
+
+    this.http = createServer((req, res) => {
+      // API routes first; if the request isn't an API route, fall through.
+      if (api && api.handle(req, res)) return;
+      staticHandler(req, res);
+    });
 
     // Attach the ws server to the http.Server (no own port) so Upgrade requests
-    // share the listening socket. `noServer: false` + `server` is the standard
-    // `ws` pattern; the connection lifecycle below is unchanged from PR2.
-    this.wss = new WebSocketServer({ server: this.http });
+    // share the listening socket. PR4: when the approval stack is present, the
+    // capability-URL `?token=` must match or the handshake is rejected. Loopback
+    // is NOT auto-trusted (tailscale serve makes everything look like loopback).
+    this.wss = new WebSocketServer({
+      server: this.http,
+      verifyClient: approval
+        ? (info: { req: IncomingMessage }) => tokenMatches(info.req, approval.token)
+        : undefined,
+    });
 
     this.wss.on("connection", (socket) => this.handleConnection(socket));
 
@@ -94,6 +162,24 @@ export class TerminalServer {
     this.detachExit = this.session.onExit((exit) => {
       this.broadcast({ type: "exit", code: exit.code, signal: exit.signal });
     });
+
+    // PR4: broadcast every approval resolution (ntfy button / PWA card / timeout)
+    // so all clients clear the matching card, and every new pending approval as
+    // `approval_request` so any connected PWA can render a card.
+    if (approval) {
+      this.detachApprovalResolved = approval.approvals.onResolved((event) => {
+        this.broadcast({ type: "approval_resolved", id: event.id, decision: event.decision });
+      });
+      this.detachApprovalCreated = approval.approvals.onCreated((a) => {
+        this.broadcast({
+          type: "approval_request",
+          id: a.id,
+          toolName: a.toolName,
+          toolInput: summariseToolInput(a.toolInput),
+          createdAt: a.createdAt,
+        });
+      });
+    }
 
     this.http.listen(this.port_, this.host);
   }
@@ -204,6 +290,12 @@ export class TerminalServer {
         case "resize":
           this.session.resize(msg.cols, msg.rows);
           break;
+        case "approval_decision":
+          // PWA card tapped allow/deny. The socket is already token-authed at the
+          // handshake, so no per-request nonce is needed (unlike the ntfy
+          // channel). resolve() broadcasts `approval_resolved` to every client.
+          this.approvals?.resolve(msg.id, msg.decision);
+          break;
       }
     });
 
@@ -235,6 +327,10 @@ export class TerminalServer {
   async close(): Promise<void> {
     this.detachExit?.();
     this.detachExit = null;
+    this.detachApprovalResolved?.();
+    this.detachApprovalResolved = null;
+    this.detachApprovalCreated?.();
+    this.detachApprovalCreated = null;
     for (const client of this.wss.clients) client.terminate();
     // Close the ws server first (it does NOT close the http.Server it's attached
     // to), then the http.Server, so the listening socket is actually released.
@@ -242,6 +338,18 @@ export class TerminalServer {
     await new Promise<void>((resolve, reject) => {
       this.http.close((err) => (err ? reject(err) : resolve()));
     });
+  }
+}
+
+/** True when the ws Upgrade request's `?token=` query matches the bridge token. */
+function tokenMatches(req: IncomingMessage, token: string): boolean {
+  try {
+    const url = new URL(req.url ?? "/", "http://localhost");
+    const supplied = url.searchParams.get("token");
+    // Constant-time compare so the handshake doesn't leak the token by timing.
+    return supplied !== null && secureEqual(supplied, token);
+  } catch {
+    return false;
   }
 }
 

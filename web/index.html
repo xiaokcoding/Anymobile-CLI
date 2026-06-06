@@ -85,11 +85,84 @@
       #send-btn:active {
         background: #1177bb;
       }
+      /* PR4 approval cards: an overlay pinned just above the input bar so it
+         doesn't disturb the terminal/input flex layout. Empty → invisible. */
+      #approvals {
+        position: absolute;
+        left: 0;
+        right: 0;
+        /* sit above the input bar (its height + safe-area inset). */
+        bottom: calc(56px + env(safe-area-inset-bottom, 0px));
+        display: flex;
+        flex-direction: column;
+        gap: 8px;
+        padding: 0 8px;
+        pointer-events: none; /* let taps through the gaps; cards re-enable below */
+        z-index: 10;
+      }
+      #approvals:empty {
+        display: none;
+      }
+      .approval-card {
+        pointer-events: auto;
+        background: #2d2d30;
+        border: 1px solid #4b4b50;
+        border-left: 3px solid #d7973a;
+        border-radius: 8px;
+        padding: 10px 12px;
+        box-shadow: 0 4px 16px rgba(0, 0, 0, 0.4);
+      }
+      .approval-title {
+        font: 600 14px ui-sans-serif, system-ui, sans-serif;
+        color: #f0c674;
+        margin-bottom: 4px;
+      }
+      .approval-preview {
+        font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+        font-size: 12px;
+        color: #cfcfcf;
+        white-space: pre-wrap;
+        word-break: break-word;
+        max-height: 5.5em;
+        overflow: auto;
+        margin-bottom: 8px;
+      }
+      .approval-actions {
+        display: flex;
+        gap: 8px;
+      }
+      .approval-actions button {
+        flex: 1 1 0;
+        font-size: 15px;
+        color: #fff;
+        border: none;
+        border-radius: 6px;
+        padding: 8px 0;
+        cursor: pointer;
+      }
+      .approval-actions button:disabled {
+        opacity: 0.5;
+        cursor: default;
+      }
+      .approval-allow {
+        background: #2e7d32;
+      }
+      .approval-allow:active {
+        background: #388e3c;
+      }
+      .approval-deny {
+        background: #b3261e;
+      }
+      .approval-deny:active {
+        background: #c62828;
+      }
     </style>
   </head>
   <body>
     <div id="app">
       <div id="terminal"></div>
+      <!-- PR4: pending tool-permission approval cards (overlay above the input bar). -->
+      <div id="approvals"></div>
       <div id="input-bar">
         <textarea
           id="prompt-input"

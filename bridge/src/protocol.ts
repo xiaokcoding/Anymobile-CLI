@@ -26,7 +26,8 @@
  *
  * IMPORTANT: keep this file byte-for-byte in sync with web/src/protocol.ts. The
  * two packages have no shared lib in the MVP; any new frame/field must land in
- * both or the terminal mirror breaks.
+ * both or the terminal mirror breaks. (PR4 added the approval frames below —
+ * `approval_request`/`approval_resolved` down, `approval_decision` up.)
  */
 
 /** WebSocket close codes (wootty contract, research §4). */
@@ -56,6 +57,9 @@ export const Backoff = {
   factor: 1.8,
   maxMs: 5_000,
 } as const;
+
+/** A permission decision the human (or a timeout) returns for a tool request. */
+export type ApprovalDecision = "allow" | "deny" | "ask";
 
 /** Server → client messages. */
 export type ServerMessage =
@@ -87,6 +91,29 @@ export type ServerMessage =
   | {
       /** Heartbeat reply to a client `ping`. */
       readonly type: "pong";
+    }
+  | {
+      /**
+       * A tool-permission request from cc's PreToolUse hook (PR4). Broadcast so
+       * any connected PWA can render an approval card. The card replies with an
+       * `approval_decision` frame (no nonce — the ws is token-authed already).
+       */
+      readonly type: "approval_request";
+      readonly id: string;
+      readonly toolName: string;
+      /** Short, human-readable summary of the tool input (already stringified). */
+      readonly toolInput: string;
+      /** ms since epoch the request was created. */
+      readonly createdAt: number;
+    }
+  | {
+      /**
+       * An approval was decided (via any channel: ntfy button, PWA card, or
+       * timeout). Broadcast so every client clears its card/notice for this id.
+       */
+      readonly type: "approval_resolved";
+      readonly id: string;
+      readonly decision: ApprovalDecision;
     };
 
 /** Client → server messages. */
@@ -111,6 +138,16 @@ export type ClientMessage =
   | {
       /** Heartbeat probe; the bridge answers with `pong`. */
       readonly type: "ping";
+    }
+  | {
+      /**
+       * The human tapped allow/deny on a PWA approval card (PR4). The ws was
+       * token-authed at the handshake, so this needs no per-request nonce; the
+       * bridge resolves the pending approval `id`.
+       */
+      readonly type: "approval_decision";
+      readonly id: string;
+      readonly decision: ApprovalDecision;
     };
 
 /** Type guard + parse for an inbound client frame. Returns null on anything malformed. */
@@ -136,6 +173,10 @@ export function parseClientMessage(raw: string): ClientMessage | null {
         : null;
     case "ping":
       return { type: "ping" };
+    case "approval_decision":
+      return typeof msg.id === "string" && isApprovalDecision(msg.decision)
+        ? { type: "approval_decision", id: msg.id, decision: msg.decision }
+        : null;
     default:
       return null;
   }
@@ -151,4 +192,8 @@ function isPositiveInt(value: unknown): value is number {
 
 function isNonNegativeInt(value: unknown): value is number {
   return typeof value === "number" && Number.isInteger(value) && value >= 0;
+}
+
+function isApprovalDecision(value: unknown): value is ApprovalDecision {
+  return value === "allow" || value === "deny" || value === "ask";
 }

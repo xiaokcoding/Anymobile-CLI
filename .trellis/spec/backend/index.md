@@ -15,6 +15,7 @@ This directory contains guidelines for backend development. Fill in each file wi
 | Guide | Description | Status |
 |-------|-------------|--------|
 | [Bridge HTTP + WebSocket Serving](./bridge-serving.md) | Single-origin static+ws on one loopback port; no public ingress | Filled |
+| [Bridge Approval + Notification](./approval-notification.md) | PR4 cc PreToolUse(http) approval round-trip, ntfy push, capability-URL/nonce auth boundary | Filled |
 | [Directory Structure](./directory-structure.md) | Module organization and file layout | To fill |
 | [Database Guidelines](./database-guidelines.md) | ORM patterns, queries, migrations | To fill |
 | [Error Handling](./error-handling.md) | Error types, handling strategies | To fill |

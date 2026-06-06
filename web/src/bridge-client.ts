@@ -31,6 +31,7 @@ import {
   Heartbeat,
   CloseCode,
   type ClientMessage,
+  type ApprovalDecision,
 } from "./protocol.js";
 import { backoffDelayMs, SeqCursor } from "./reconnect.js";
 
@@ -40,6 +41,22 @@ export interface BridgeClientOptions {
   readonly fit: FitAddon;
   /** Debounce window (ms) for coalescing resize events before sending. */
   readonly resizeDebounceMs?: number;
+  /**
+   * PR4: called when the bridge surfaces a new tool-permission request. The UI
+   * (main.ts) renders an approval card; the user's tap calls
+   * `sendApprovalDecision`.
+   */
+  readonly onApprovalRequest?: (req: {
+    id: string;
+    toolName: string;
+    toolInput: string;
+    createdAt: number;
+  }) => void;
+  /**
+   * PR4: called when an approval is resolved via ANY channel (this card, another
+   * client, an ntfy button, or the bridge timeout) so the UI clears the card.
+   */
+  readonly onApprovalResolved?: (id: string, decision: ApprovalDecision) => void;
 }
 
 export class BridgeClient {
@@ -47,6 +64,8 @@ export class BridgeClient {
   private readonly term: Terminal;
   private readonly fit: FitAddon;
   private readonly resizeDebounceMs: number;
+  private readonly onApprovalRequest?: BridgeClientOptions["onApprovalRequest"];
+  private readonly onApprovalResolved?: BridgeClientOptions["onApprovalResolved"];
 
   private socket: WebSocket | null = null;
   private resizeTimer: ReturnType<typeof setTimeout> | null = null;
@@ -70,6 +89,8 @@ export class BridgeClient {
     this.term = options.term;
     this.fit = options.fit;
     this.resizeDebounceMs = options.resizeDebounceMs ?? 150;
+    this.onApprovalRequest = options.onApprovalRequest;
+    this.onApprovalResolved = options.onApprovalResolved;
 
     // Register input/resize listeners ONCE so reconnects don't stack duplicates.
     // Forward keystrokes / pasted text; the bridge feeds the PTY char-by-char.
@@ -97,6 +118,20 @@ export class BridgeClient {
    */
   sendInput(data: string): void {
     this.send({ type: "input", data });
+  }
+
+  /**
+   * Reply to an approval card (PR4). The ws is already token-authed at the
+   * handshake (capability URL), so this carries no per-request nonce — the bridge
+   * resolves the pending approval `id` and broadcasts `approval_resolved` to every
+   * client (including us) to clear the card.
+   *
+   * Dropped silently if the socket isn't open; the bridge's fail-closed timeout
+   * still returns a decision to cc, and a reconnect will deliver the eventual
+   * `approval_resolved` so the card doesn't hang forever.
+   */
+  sendApprovalDecision(id: string, decision: ApprovalDecision): void {
+    this.send({ type: "approval_decision", id, decision });
   }
 
   /** Tear everything down: stop reconnecting, drop the socket, remove listeners. */
@@ -158,6 +193,17 @@ export class BridgeClient {
           break;
         case "exit":
           this.term.write(`\r\n\x1b[33m[claude exited: code=${msg.code}]\x1b[0m\r\n`);
+          break;
+        case "approval_request":
+          this.onApprovalRequest?.({
+            id: msg.id,
+            toolName: msg.toolName,
+            toolInput: msg.toolInput,
+            createdAt: msg.createdAt,
+          });
+          break;
+        case "approval_resolved":
+          this.onApprovalResolved?.(msg.id, msg.decision);
           break;
       }
     });
