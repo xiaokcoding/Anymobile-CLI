@@ -90,3 +90,36 @@
 
 **状态**：未 commit。⚠️ 仓库**仍零 commit**，PR0–PR3（含本 bridge-serve 半）全 untracked。
 
+## 2026-06-02 — 收尾：spec/文档同步 + 首个 commit + 推送 GitHub ✅
+
+**收尾1（spec/文档同步）**：
+- 新增 `.trellis/spec/backend/bridge-serving.md`（infra code-spec，7 段强制模板）：单 origin 同端口 static+ws、**127.0.0.1-only**（不暴露公网入站 DoD）、`WEB_DIST`、`/sw.js` no-cache · `/assets` immutable、防目录穿越、dist 缺失 503、SPA 回退；含 Wrong/Correct（别拆两 origin / 别绑 0.0.0.0）+ PR4 hook 须挂同 origin。登记进 `backend/index.md`。
+- README：补 `config.ts` web-dist、PR3 行改「代码完成并经 trellis-check」、把「留待用户环境」段升级为成形的 **pwsh7 真机 runbook**（DoD 部署说明）。
+- prd：实施计划表后加 2026-06-02 进度注记。
+
+**收尾2（首个 commit）**：`git add -A` → root commit **`1edcc1c`**「feat: mobile remote control for Claude Code — bridge + PWA (PR0–PR3)」，**140 文件 / 21844+ 行**。提交前扫文件名 + 内容无密钥；`.gitignore` 已挡 node_modules/dist/.env。（满屏 LF→CRLF 仅 Windows autocrlf 警告，不影响内容；可选后续加 `.gitattributes` 规范化。）
+
+**推送**：`git remote add origin git@github.com:xiaokcoding/Anymobile-CLI.git` + `git branch -M main` + `git push -u origin main` → **成功**（`* [new branch] main -> main`，main 跟踪 origin/main）。**零 commit 风险解除**。
+
+**用户环境**：Windows Terminal + **PowerShell 7**（给用户的命令用 `$env:VAR='…'`，非 bash 前缀）。
+
+**状态**：已入库并推送，工作树干净。任务仍 **in_progress**——PR3 的 tailscale/手机实测（验收①③）留用户环境；PR4（审批+通知）、PR5（加固+文档）未开始。`/trellis:finish-work` 待整个 MVP 收口再跑（且它会拒绝在 dirty tree 上运行，目前已干净）。
+
+## 2026-06-06 — PR4（审批+通知）完成并经 trellis-check ✅
+
+**范围**：用户拍板两个设计叉——审批通道**两者都要**（ntfy 锁屏 http-action 按钮 + PWA 审批卡片，裁决同一条 pending）；鉴权走 **Capability URL**（`?token=` 存 localStorage，ws 与 cc hook 共用 `BRIDGE_TOKEN`，ntfy 动作用每条审批的一次性 nonce，主 token 不外泄给 ntfy.sh）。
+
+**实现**（trellis-implement）：
+- bridge 新增 `approval.ts`（channel-agnostic pending 注册表：`create→{id,nonce,promise}`、`resolve(id,decision,{viaNonce})→resolved/already-settled/unknown/bad-nonce`、fail-closed 超时、settled 滞留 60s 幂等、timer `unref`）、`ntfy.ts`（outbound JSON-publishing + http-action 按钮，topic 未设跳过且**永不抛**）、`api-server.ts`（`/hooks/pre-tool-use` 阻塞审批 + `/hooks/stop` + `/hooks/notification` + `/approvals/<id>?decision=&nonce=`；防御式解析 cc hook JSON）、`claude-hook.example.json`（**示例**配置，装进 BRIDGE_CWD 项目而非本仓库）。
+- bridge 改 `config.ts`（+token/ntfy/approvalBaseUrl/approvalTimeoutMs/approvalTimeoutDecision、`tokenIsEphemeral()`）、两份 `protocol.ts` 同步加审批帧（`approval_request`/`approval_resolved` 下行、`approval_decision` 上行）、`ws-server.ts`（`verifyClient` 校验 `?token=`、API 路由挂 static 之前、审批广播、inbound approval_decision、close 清 listener）、`index.ts`（接线 + 打印 capability URL + ephemeral/缺 ntfy warn）。
+- web 新增 `approvals.ts`（纯 store，无 DOM 单测）；改 `main.ts`（capability URL token 捕获→localStorage→`history.replaceState` 抹掉、token 拼进 ws URL、审批卡片渲染）、`bridge-client.ts`（+`sendApprovalDecision`）、`index.html`（`#approvals` 覆盖层）。README + env 表 + 安全段更新。
+
+**核查**（trellis-check）：发现并自修 2 处——① **最高危**：ws token / hook Bearer / nonce 三处 `===` 非常量时间比对（泄露长度+前缀计时侧信道；token 在 tailnet 可达、nonce 经 ntfy.sh），新建 `secure-compare.ts`（SHA-256→`timingSafeEqual`）三处统一接上 + 5 条测试；② 前端审批卡片重渲染丢失双击守卫（加模块级 `decidedIds` Set，resolved 时清）。7 个承重点全 PASS：DoD 仍只 listen 127.0.0.1、**反代后不信任 loopback**、ntfy 仅 outbound、超时 fail-closed deny(<300s)、bridge-serving 契约不回退、三大坑 + PR2 重连未动、两份 protocol.ts 一致、本仓库 live `.claude/settings.json` 未污染。
+测试：**bridge 61 + web 24 = 85 全过**（原 40）；lint/typecheck/`web build` 全绿。
+
+**spec**（trellis-update-spec）：新增 `.trellis/spec/backend/approval-notification.md`（强制 7 段：4 HTTP 路由 + 3 ws 帧签名、env 表、错误矩阵、Good/Base/Bad、4 组 Wrong/Correct）+ 常量时间比对约定 + 「push 通道不得 gate 审批」gotcha；登记进 backend/index.md。
+
+**留给用户环境 / 后续**：① 真机验收②（hook 装进 BRIDGE_CWD 项目、触发一次审批、ntfy 真推、iOS 配 `upstream-base-url` 即时送达）；② `claude --debug` 核 cc v2.1.159 的 PreToolUse http-hook 真实 input/response schema（bridge 已防御式解析）；③ PR5 加固+文档（iOS 顶部 safe-area、protocol.ts 注释收紧等）。
+
+**状态**：PR4 代码完成并核查通过，待提交（工作 commit + journal 簿记 commit）。任务仍 **in_progress**——PR5 + 真机验收①②③ 未了。
+
