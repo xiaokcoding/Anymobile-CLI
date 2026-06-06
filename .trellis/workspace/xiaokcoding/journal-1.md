@@ -123,3 +123,24 @@
 
 **状态**：PR4 代码完成并核查通过，待提交（工作 commit + journal 簿记 commit）。任务仍 **in_progress**——PR5 + 真机验收①②③ 未了。
 
+## 2026-06-06 — PR5（加固+文档）完成并经 trellis-check ✅ — MVP 代码侧收口
+
+**范围**：MVP 收口 PR。prd 第 130 行「加固（退出/崩溃处理）+ 完整 README」+ PR3/PR4 check 记在 journal 的三个非阻塞遗留项。
+
+**实现**（trellis-implement）：
+- **A1 退出/崩溃处理**（`index.ts`）：一个 re-entrant `shutdown(sig, exitCode)`——固定顺序 **kill PTY → server.close()（ws+http）→ process.exit**；SIGINT/SIGTERM 走 exit 0；新增 `uncaughtException`/`unhandledRejection` 先 `console.error` 再 `shutdown(...,1)`（永不静默死，手机不会只看到 ws 莫名掉线）。`shuttingDown` 守卫令「信号撞崩溃 / 双信号」幂等。**PTY 退出 ≠ bridge 退出**：`session.onExit` 只 log、ws 广播 exit，bridge 继续 serve 静态页（手机仍能开 PWA 看到 `[claude exited]`，而非 connection-refused）。
+- **A2 iOS 顶部 safe-area**（`web/index.html`）：`#app` 加 `padding-top: env(safe-area-inset-top)` + box-sizing，镜像既有底部 inset。纯 CSS，未动布局/IME/xterm 适配。
+- **A3 protocol.ts 注释收紧**：两份头注释「byte-for-byte」改为准确的「mirror / 同 wire 契约」（仅注释，两份同步改，协议内容未动）。
+- **A4 `.gitattributes`**（新）：`* text=auto eol=lf` + `*.png binary`；**刻意不 `git add --renormalize`**，故不产生满仓库行尾噪声 diff，只在各文件下次被改时生效（`git diff --stat` 已验证仅本次实改文件的紧凑 diff）。
+- **B 文档**：README 收成端到端 pwsh7 部署 runbook（PC：deps→build web→起 bridge[全 env: BRIDGE_CWD/BRIDGE_TOKEN/NTFY_*/APPROVAL_*]→`tailscale serve --bg 8866`→hook 装进 **BRIDGE_CWD 目标项目**而非本仓库→建 ntfy topic；手机：开 capability URL→加主屏→ntfy app）+ PR5 加固段 + roadmap 标 PR5 ✅。
+- `ws-server.test.ts`：FakeSession 支持 `onExit`（含「已退出则立即通知」）+ 2 条 PR5 exit 测试。
+
+**核查**（trellis-check）：11 项全 PASS，仅修 1 处装饰性（test 文件三连空行 + 补回被顶掉的 PR3 段注释）。逐项确认无回退：三大坑（逐码点喂+15ms / resize-alive #827 / 剔除 API key）、PR2 重连契约（attach→ready→delta→live / 12s ping / 24s 看门狗 / 4103 / backoff / cleanup 清 timer+listener）、bridge-serving（单 origin / 127.0.0.1-only / 防穿越 / sw no-cache / assets immutable / 503）、PR4 审批契约（阻塞 await / 超时 deny<300s / nonce / 常量时间比对 / push 不 gate）、两份 protocol.ts 一致、live `.claude/settings.json` 未污染；`.gitattributes` 无全仓 renormalize；README pwsh7 语法 + env 表与 `config.ts` 一致 + 无密钥。
+测试：**bridge 63（+2）+ web 24 = 87 全过**（原 85）；lint/typecheck/`web build`(dist 含 manifest/sw/icons)/frozen-lockfile 全绿；零新运行时依赖。
+
+**spec**（trellis-update-spec）：`bridge-serving.md` 加「进程生命周期」Convention（shutdown 顺序 + 三步为何承重：kill PTY 防孤儿 conpty / force-exit 绕 #887 不留僵尸占监听端口 / crash 先 log）+「PTY 退出 ≠ bridge 退出」Gotcha（含测试断言点）。A2/A3/A4/README 走查后判定不入 spec（A2 纯 CSS 无 frontend spec 落点；A3 是去除不准确措辞、mirror 契约已在 approval-notification.md；A4 仓库卫生一次性；README 是文档）。
+
+**状态**：PR5 代码完成并核查通过，待提交（feat 工作 commit + chore journal/jsonl 簿记 commit）。**MVP 代码侧 PR0–PR5 全部收口**。任务仍 **in_progress**——只剩真机验收①②③（用户环境），验完即可 `/trellis:finish-work`。
+
+**留给用户环境**：真机验收①（手机发 prompt→实时输出）②（触发审批→ntfy 锁屏按钮 / PWA 卡片一键裁决→cc 继续）③（切后台>30s/断网→重连补回中间输出不丢不重）；并以 `claude --debug` 核 cc v2.1.159 的 PreToolUse http-hook 真实 input/response schema（bridge 已防御式解析，schema 漂移不崩）。
+
