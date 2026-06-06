@@ -115,3 +115,39 @@ http.listen(port, "127.0.0.1");                     // loopback only — no publ
 **Related**: bracketed-paste / resize-alive / API-key-strip pitfalls live in
 `pty-session.ts` (prd §三个 load-bearing 坑); reconnect/replay contract in
 `protocol.ts` + `ws-server.ts` (PR2).
+
+---
+
+## Convention: bridge process lifecycle (PR5 hardening)
+
+**What**: `index.ts` owns the process lifecycle through ONE re-entrant
+`shutdown(sig, exitCode)` that always runs the same order — **kill the PTY child
+first → `server.close()` (ws + http) → `process.exit(exitCode)`** — wired to four
+sources:
+- `SIGINT` / `SIGTERM` → `shutdown(sig, 0)` (Ctrl-C, `kill`).
+- `uncaughtException` / `unhandledRejection` → `console.error(reason)` **then**
+  `shutdown(sig, 1)` — log loudly first, never die silently.
+
+A `shuttingDown` boolean guard makes a signal racing a crash (or a double signal)
+idempotent — `shutdown` runs its body exactly once.
+
+**Why each step is load-bearing**:
+- **PTY first**: skip `session.kill()` and Ctrl-C leaves an orphaned conpty/`claude`
+  holding the cwd. Kill the child before tearing down the server.
+- **force-exit**: node-pty's ConoutConnection worker isn't `unref`'d (#887), so the
+  event loop won't drain on its own after `kill()`; `process.exit()` stops the bridge
+  lingering as a zombie that still holds the listening socket and blocks the next start.
+- **log before exit on crash**: the only thing the phone sees is its ws dropping — a
+  silent death gives zero diagnosis. `console.error` the cause, THEN orderly shutdown.
+
+## Gotcha: a PTY exit is NOT a bridge exit
+
+> **Warning**: When `claude` exits, `session.onExit` only **logs** and the ws layer
+> broadcasts an `exit` frame — the bridge process **keeps serving**. Do NOT wire
+> `session.onExit` to `shutdown()`. The phone must still load the PWA and read
+> `[claude exited: code=…]`; tearing the bridge down on claude's exit would drop the
+> static origin too, so the user gets connection-refused with no message instead.
+>
+> Tests (`ws-server.test.ts`): a live client receives the `exit` frame and the server
+> still accepts a NEW ws afterward; a client attaching *after* the PTY exited gets
+> `ready{alive:false}` + an `exit` frame.

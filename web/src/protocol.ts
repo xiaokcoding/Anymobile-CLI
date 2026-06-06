@@ -1,12 +1,14 @@
 /**
  * WebSocket wire protocol — client mirror of bridge/src/protocol.ts.
  *
- * Kept as a standalone copy (the bridge and web are separate packages with no
- * shared lib in the MVP). If this drifts from the bridge, the terminal mirror
- * breaks — keep the two `type` unions, the shared constants, and the field
- * shapes in sync. See bridge/src/protocol.ts for the full PR2 reconnect/replay +
- * heartbeat contract and the PR4 approval frames
- * (`approval_request`/`approval_resolved` down, `approval_decision` up).
+ * This is a MIRROR, not a byte-identical copy: it describes the same wire
+ * contract from the client's end (parses inbound SERVER frames, serializes
+ * CLIENT frames — the reverse of the bridge). The bridge and web are separate
+ * packages with no shared lib in the MVP, so if the two drift the terminal
+ * mirror breaks — keep the two `type` unions, the shared constants (CloseCode /
+ * Heartbeat / Backoff), and every field shape in sync. See bridge/src/protocol.ts
+ * for the full PR2 reconnect/replay + heartbeat contract and the PR4 approval
+ * frames (`approval_request`/`approval_resolved` down, `approval_decision` up).
  */
 
 /** WebSocket close codes (wootty contract, research §4). */

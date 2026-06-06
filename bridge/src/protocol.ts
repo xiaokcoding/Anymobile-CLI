@@ -24,9 +24,13 @@
  *     heartbeat as app-layer JSON frames defined here. Either side treats a
  *     missing counterpart as a dead link (bridge closes 4103; client reconnects).
  *
- * IMPORTANT: keep this file byte-for-byte in sync with web/src/protocol.ts. The
- * two packages have no shared lib in the MVP; any new frame/field must land in
- * both or the terminal mirror breaks. (PR4 added the approval frames below —
+ * IMPORTANT: this file and web/src/protocol.ts are MIRRORS — they describe the
+ * same wire contract from opposite ends, not byte-identical copies. The bridge
+ * parses inbound CLIENT frames (`parseClientMessage`) and serializes SERVER
+ * frames; the web side does the reverse. Keep the two `type` unions, the shared
+ * constants (CloseCode / Heartbeat / Backoff), and every field shape in lockstep
+ * — there is no shared lib in the MVP, so any new frame/field must land in BOTH
+ * or the terminal mirror breaks. (PR4 added the approval frames below —
  * `approval_request`/`approval_resolved` down, `approval_decision` up.)
  */
 

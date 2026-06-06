@@ -35,6 +35,12 @@
            hidden behind the mobile URL bar / on-screen keyboard. Falls back to
            100vh above. */
         height: 100dvh;
+        /* Keep content clear of the iOS notch / status bar in standalone mode.
+           With apple-mobile-web-app-status-bar-style=black-translucent the web
+           app draws under the status bar, so without this the first terminal row
+           hides behind the notch. The dark body background fills the inset. */
+        padding-top: env(safe-area-inset-top, 0px);
+        box-sizing: border-box;
       }
       #terminal {
         flex: 1 1 auto;

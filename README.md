@@ -103,7 +103,63 @@ pnpm build         # 构建（web build 会把 manifest/sw.js/icons 拷进 web/d
 | PR2 | 重连补流（lastSeq/replay + ping/pong + backoff） | ✅ |
 | PR3 | PWA 化 + Tailscale（manifest/SW + bridge 同端口托管 PWA + tailscale serve + 手机连入 + 输入框） | 🟡 代码完成并经 trellis-check（PWA + 输入框 + bridge 同端口托管 web/dist）；`tailscale serve` + 手机实测留待用户环境 |
 | PR4 | 审批 + 通知（PreToolUse http hook + Stop hook + ntfy + token 鉴权） | 🟡 代码完成（token 鉴权 + 三通道审批回路 + ntfy + Stop/Notification hook + 卡片）；hook 装进目标项目 + ntfy 实推留待用户环境 |
-| PR5 | 加固 + 文档 | ⬜ |
+| PR5 | 加固 + 文档（进程退出/崩溃处理、iOS 顶部 safe-area、完整端到端部署 runbook） | ✅ 代码完成并经 trellis-check（SIGINT/SIGTERM + uncaughtException/unhandledRejection 优雅退出、iOS `safe-area-inset-top`、本文档端到端化）；真机验收①②③ 留待用户环境 |
+
+## 部署 / 上手（端到端 runbook，PowerShell 7）
+
+> 从零到手机能用的一条龙。用户环境 = **Windows Terminal + PowerShell 7**，命令一律用 pwsh 的 `$env:VAR='…'`（**不是** bash 的 `VAR=val cmd` 前缀）。`$env:` 只在当前 pwsh 会话有效，换窗口要重设。PWA 与 ws **同端口同 origin**，所以**一条 `tailscale serve` 就够**，手机用同源 `wss://<host>` 直连。
+
+### PC 端
+
+```powershell
+# 0) 一次性：装依赖（node-pty 自带 win32-x64 预编译，无需本地 C++ 编译）
+pnpm install --frozen-lockfile
+
+# 1) 构建 PWA（改了 web 代码后重跑）——不构建时 bridge 不崩溃，HTTP 返 503 + 构建提示
+pnpm --filter @mobile-ssh/web build            # → web/dist（含 manifest/sw.js/icons）
+
+# 2) 配置并起 bridge（长驻前台，这就是你的 cc 会话）
+#    用 start 而非 dev:bridge——后者是 tsx watch，文件一保存就重启、连带杀掉 PTY 会话
+$env:BRIDGE_CWD   = 'D:\Code\要让cc干活的项目'          # spawn claude 的工作目录
+$env:BRIDGE_TOKEN = '一段固定的长随机串'                 # 固定值链接才稳定；不设则每次重启都变（见下方告警）
+# 可选（PR4 通知/审批按钮）：
+$env:NTFY_TOPIC        = '你的-长随机-topic'             # 不设则只跳过推送，仍可用 PWA 卡片审批
+$env:NTFY_SERVER       = 'https://ntfy.sh'              # 自托管时填你的（iOS 即时性需自托管侧配 upstream-base-url）
+$env:APPROVAL_BASE_URL = 'https://<host>.<tailnet>.ts.net'  # 让 ntfy 通过/拒绝按钮能回调 bridge（缺则推纯通知无按钮）
+# $env:APPROVAL_TIMEOUT_MS = '280000'                  # 默认 280s，必须 < cc hook timeout(300s)
+# $env:APPROVAL_TIMEOUT_DECISION = 'deny'              # 超时 fail-closed 默认
+pnpm --filter @mobile-ssh/bridge start          # 日志：listening on … + 一条 capability URL（含 ?token=）
+
+# 3) 本机冒烟：PC 浏览器开日志里的 capability URL http://127.0.0.1:8866/?token=…
+#    （127.0.0.1 也是 secure context，SW 一并注册；token 会被前端存进 localStorage 并从地址栏抹掉）
+
+# 4) Tailscale fronting（另开一个 pwsh 窗口；--bg 后台持久、且独立于 bridge，可随意重启 bridge）
+tailscale serve --bg 8866                       # 首次弹网页同意开 HTTPS/MagicDNS；打印 https://<host>.<tailnet>.ts.net
+tailscale serve status                          # 确认挂载（仅 tailnet 内可达；不要用 Funnel=公网）
+```
+
+完整 env 表见上方 [Bridge 环境变量](#bridge-环境变量)。bridge 启动时会**剔除 `ANTHROPIC_API_KEY` / `ANTHROPIC_AUTH_TOKEN`** 再 spawn `claude`（保订阅额度），并把 token **只打到本机 loopback 控制台**。
+
+### 把 hook 装进**目标项目**（审批 + 完成通知，PR4）
+
+把 `bridge/claude-hook.example.json` 里的 `hooks` 块拷进 **`BRIDGE_CWD` 那个项目**的 `.claude/settings.json`（或机器级 `~/.claude/settings.json` = Windows `%USERPROFILE%\.claude\settings.json`）。URL 用 `http://127.0.0.1:8866/hooks/…`（被远控的 cc 与 bridge 同机，loopback 正确）；`$env:BRIDGE_TOKEN` 在启动那个 cc 的 shell 里设成**同值**。详见下方 [审批 + 通知（PR4）](#审批--通知pr4)。
+
+> ⚠️ **绝不要改本仓库的 `.claude/settings.json`**——它装的是 Trellis 工作流 hooks。装到本仓库会在你自己跑 cc 时 POST 一个没起的 bridge，徒增噪音。
+
+### 手机端
+
+1. 装 **Tailscale**、登入**同一 tailnet** 并连上。
+2. 浏览器开**日志里的 capability URL** `https://<host>.<tailnet>.ts.net/?token=<BRIDGE_TOKEN>` → 看到终端 + 底部输入框。token 首次随 URL 进来后存进 localStorage 并从地址栏抹掉。
+3.「**分享 → 添加到主屏幕**」→ 从主屏图标独立窗口（`display: standalone`）启动；之后无需再带 `?token=`。iOS 上 Web Push **必须**先加到主屏（研究 R3）。
+4.（可选，PR4 通知）装 **ntfy app**（App Store / Google Play / F-Droid）订阅你的 `NTFY_TOPIC`。**iOS 即时送达**：自托管 ntfy 需在服务端配 `upstream-base-url: https://ntfy.sh`（iOS 后台限制，见研究 R3）；用公共 `ntfy.sh` 则直接即时。**收 ntfy 通知不需要开 Tailscale**（ntfy 走公网），但**操作 PWA / 终端必须连 Tailscale**。
+
+### 验收（真机）
+
+- **①「发 prompt → 实时输出」**：手机底部输入框打一条 prompt → 回车（Enter 发送，Shift+Enter 换行）→ PC 上 cc 执行、过程实时镜像到手机；中文/拼音 IME 期间回车不误发、不重复。
+- **②「一键审批」**：cc 跑到一个工具调用 → 手机收 ntfy 推送（带通过/拒绝按钮）**且** PWA 弹审批卡片 → 任一通道点「通过」→ cc 继续；点「拒绝」/ 超时（280s）→ cc 被拒。
+- **③「切后台补流」**：PWA 切后台 >30s 或断网/切网 → 回前台自动重连，期间 cc 的输出**补回、不丢不重**（断点续传 `lastSeq`；缓冲滚掉则整屏 reset 再全量）。
+
+> **留待用户环境实测**（环境探测时本机未装 Tailscale）：上面步骤 4（`tailscale serve --bg`）+ 手机加主屏经 wss 实连 + ntfy 实推。Windows 下 `tailscale serve --bg` 重启是否自持未坐实，建议实测一次重启。`PreToolUse` http-hook 的真实 input/response schema 在信赖前先用 `claude --debug` 抓一次往返核对（bridge 已防御式解析）。
 
 ## PWA / 移动端（PR3）
 
@@ -116,35 +172,8 @@ pnpm build         # 构建（web build 会把 manifest/sw.js/icons 拷进 web/d
 - **Service Worker**：`public/sw.js` 仅做 installable + app shell 离线缓存；注册在 `main.ts`，**仅在 secure context**（localhost / https）注册，裸 `http://100.x` 会跳过（不报错）。
 - **图标**：`public/icons/icon-{192,512}.png` 是脚本生成的占位图（深色底 + `>_` 终端字形），`node scripts/generate-icons.mjs` 可重新生成；正式美术图标为 fast-follow。
 
-### 真机连入 runbook（PowerShell 7）
-
-bridge 同端口 serve PWA + ws，所以一条 `tailscale serve` 就把整个 origin 前置成 HTTPS、手机用同源 `wss://<host>` 直连。环境变量用 pwsh 的 `$env:VAR='…'`（**不是** bash 的 `VAR=val cmd` 前缀）。
-
-```powershell
-# 1) 构建 PWA（改了 web 代码后重跑）
-pnpm --filter @mobile-ssh/web build            # → web/dist（含 manifest/sw.js/icons）
-
-# 2) 起 bridge（长驻前台，这就是你的 cc 会话）
-#    用 start 而非 dev:bridge——后者是 tsx watch，文件一保存就重启、连带杀掉 PTY 会话
-$env:BRIDGE_CWD = 'D:\Code\要让cc干活的项目'
-$env:BRIDGE_TOKEN = '一段固定的长随机串'              # PR4：固定值，链接才稳定；不设则每次重启都变
-# 可选（PR4 通知/审批按钮）：
-$env:NTFY_TOPIC = '你的-长随机-topic'                 # 不设则只跳过推送，仍可用 PWA 卡片审批
-$env:APPROVAL_BASE_URL = 'https://<host>.<tailnet>.ts.net'  # 让 ntfy 通过/拒绝按钮能回调 bridge
-pnpm --filter @mobile-ssh/bridge start          # 日志：listening on … + 一条 capability URL（含 ?token=）
-
-# 3) 本机冒烟：PC 浏览器开日志里的 capability URL http://127.0.0.1:8866/?token=…
-#    （127.0.0.1 也是 secure context，SW 一并注册；token 会被前端存进 localStorage 并从地址栏抹掉）
-
-# 4) Tailscale fronting（另开一个 pwsh 窗口；--bg 后台持久、且独立于 bridge，可随意重启 bridge）
-tailscale serve --bg 8866                       # 首次弹网页同意开 HTTPS/MagicDNS；打印 https://<host>.<tailnet>.ts.net
-tailscale serve status                          # 确认挂载
-```
-
-手机装 Tailscale、登入**同一 tailnet** 并连上 → 浏览器开**日志里的 capability URL**（`https://<host>.<tailnet>.ts.net/?token=…`）→ 终端+输入框 →「分享 → 添加到主屏」独立窗口启动。token 首次随 URL 进来后存进 localStorage 并从地址栏抹掉，之后从主屏图标启动无需再带 `?token=`。
-
-> **留待用户实测**（环境探测时本机未装 Tailscale）：步骤 4 + 手机加主屏经 wss 实连，对照验收①（发 prompt→实时输出、中文/IME 不重复）③（PWA 后台 >30s / 切网 → 重连补流、不丢不重）。
-> **不要用 Funnel**（公网入站，违反「不暴露公网入站」DoD）；`tailscale serve` 仅 tailnet 内可达。Windows 下 `--bg` 重启是否自持未坐实，建议实测一次重启。`$env:` 仅当前 pwsh 会话有效，换窗口要重设。
+> 连入步骤（构建 PWA → 起 bridge → `tailscale serve --bg` → 手机加主屏）见上方 [部署 / 上手（端到端 runbook）](#部署--上手端到端-runbookpowershell-7)。
+> **不要用 Funnel**（公网入站，违反「不暴露公网入站」DoD）；`tailscale serve` 仅 tailnet 内可达。
 
 ## 审批 + 通知（PR4）
 
@@ -188,3 +217,11 @@ tailscale serve status                          # 确认挂载
 - **token 鉴权（PR4 已落地）**：ws 握手校验 capability URL 的 `?token=`、cc hook 校验 `Authorization: Bearer`，二者同用 `BRIDGE_TOKEN`；ntfy 按钮用每条审批的一次性 nonce（不外泄 token）。bridge 仍只 `listen` 在 `127.0.0.1`；ntfy 是 outbound POST。**loopback 不自动放行**——tailscale serve 反代后请求在 bridge 看来都是 loopback。
 - PWA 必须经 `tailscale serve` 拿 HTTPS：裸 `http://100.x` 不是 secure context，Service Worker / Web Push / `wss://` 全失效。
 - Service Worker 只拦**同源 GET** 导航/静态资源，**不碰** `POST /hooks/*` 与 `/approvals/*`；capability URL 的 token 进来后立即 `history.replaceState` 抹掉、不进 SW 缓存。
+
+## 进程生命周期 / 加固（PR5）
+
+- **优雅退出**：`SIGINT`（Ctrl-C）/ `SIGTERM` → kill PTY 子进程 → 关 ws+http server → 强制 `process.exit`（node-pty 的 ConoutConnection worker 未 `unref`，#887，否则事件循环 drain 不掉、bridge 挂成僵尸占住监听端口）。不会在 Ctrl-C 后留下孤儿 conpty / claude。
+- **崩溃兜底**：`uncaughtException` / `unhandledRejection` → 先**大声 log**（否则 bridge 静默死掉、手机只看到 ws 断而不知缘由）→ 再走同一套优雅退出。秉持「个人自用、可重启」，崩溃后**退出**（而非带病续跑）。
+- **PTY 退出 ≠ bridge 退出**：被远控的 `claude` 自己退出时，bridge **继续 serve**——向所有 ws 广播 `exit` 帧（手机终端显示 `[claude exited: code=…]`），后连的客户端 attach 时也会被告知已退出。这两件事**刻意分开**：claude 退出只是终端事件，bridge 进程仍活着以便看到通知 / 重连。
+
+> **iOS 顶部安全区**：`index.html` 的 `#app` 加了 `padding-top: env(safe-area-inset-top)`，standalone（加主屏全屏）下首行终端不会被刘海 / 状态栏压住（配合底部已有的 `safe-area-inset-bottom`）。

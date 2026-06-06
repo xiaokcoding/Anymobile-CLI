@@ -1,0 +1,9 @@
+# Normalize line endings so Windows checkouts don't churn the whole tree with
+# LF→CRLF diffs (the autocrlf warning seen on the PR0–PR4 commit). Git stores
+# text as LF; working-tree EOL follows each dev's core.autocrlf. Existing commits
+# are untouched until a file is next edited — we intentionally do NOT renormalize
+# the whole repo here (that would be one noisy commit for zero behaviour change).
+* text=auto eol=lf
+
+# Binary assets: never touch their bytes (PNG icons are generated, not text).
+*.png binary

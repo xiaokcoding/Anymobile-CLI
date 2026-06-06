@@ -10,6 +10,11 @@
  * ApprovalRegistry holds pending PreToolUse approvals (resolved by ntfy button,
  * PWA card, or fail-closed timeout); ntfy carries outbound push.
  *
+ * PR5: process-level hardening — SIGINT/SIGTERM graceful shutdown (kill PTY +
+ * close server + force-exit) plus uncaughtException/unhandledRejection handlers
+ * that log loudly before shutting down, so the bridge never dies silently and
+ * leaves the phone's ws dropping with no explanation.
+ *
  * Requirements / decisions / research:
  *   .trellis/tasks/06-01-mobile-remote-control-app-for-claude-code-mvp/
  */
@@ -106,20 +111,38 @@ async function main(): Promise<void> {
   });
 
   let shuttingDown = false;
-  const shutdown = (sig: string): void => {
+  const shutdown = (sig: string, exitCode = 0): void => {
     if (shuttingDown) return;
     shuttingDown = true;
     console.log(`[mobile-ssh] ${sig} received — shutting down.`);
+    // Graceful order: kill the PTY child first (so no orphaned conpty/claude is
+    // left behind on Ctrl-C), then close the ws + http server, then force-exit.
     session.kill();
     void server.close().finally(() => {
       // node-pty's ConoutConnection worker isn't unref'd (issue #887), so the
-      // event loop won't drain on its own after kill(). Force-exit.
-      process.exit(0);
+      // event loop won't drain on its own after kill(). Force-exit so the bridge
+      // never lingers as a zombie holding the listening socket.
+      process.exit(exitCode);
     });
   };
 
   process.on("SIGINT", () => shutdown("SIGINT"));
   process.on("SIGTERM", () => shutdown("SIGTERM"));
+
+  // Last-resort crash handlers. Without these a thrown-but-uncaught error (or a
+  // rejected promise) would kill the bridge SILENTLY — the phone would just see
+  // its ws drop with no idea why. Log loudly, then shut down the same orderly way
+  // (kill PTY + close server) so we don't leave an orphaned claude/conpty behind.
+  // We DO exit (a corrupted process isn't worth keeping per the "个人自用、可重启"
+  // call), but only after logging and best-effort cleanup.
+  process.on("uncaughtException", (err) => {
+    console.error("[mobile-ssh] uncaughtException — shutting down:", err);
+    shutdown("uncaughtException", 1);
+  });
+  process.on("unhandledRejection", (reason) => {
+    console.error("[mobile-ssh] unhandledRejection — shutting down:", reason);
+    shutdown("unhandledRejection", 1);
+  });
 }
 
 main().catch((err) => {

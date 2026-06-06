@@ -38,6 +38,7 @@ function parseFrame(raw: string): ServerMessage | null {
 class FakeSession {
   private readonly buf = new ScrollbackBuffer(1024 * 1024);
   private readonly listeners = new Set<(c: OutputChunk) => void>();
+  private readonly exitListeners = new Set<(e: { code: number; signal: number | undefined }) => void>();
   cols = 80;
   rows = 24;
   alive = true;
@@ -59,8 +60,11 @@ class FakeSession {
     this.listeners.add(listener);
     return () => this.listeners.delete(listener);
   }
-  onExit(): () => void {
-    return () => undefined;
+  onExit(listener: (e: { code: number; signal: number | undefined }) => void): () => void {
+    // Mirror PtySession: notify immediately if already exited, else register.
+    if (this.exit) listener(this.exit);
+    this.exitListeners.add(listener);
+    return () => this.exitListeners.delete(listener);
   }
   write(): void {
     /* not exercised here */
@@ -73,6 +77,12 @@ class FakeSession {
     const chunk = this.buf.push(data);
     for (const l of this.listeners) l(chunk);
     return chunk;
+  }
+  /** Test helper: simulate the PTY exiting (like a real PTY onExit). */
+  exitNow(code = 0, signal: number | undefined = undefined): void {
+    this.alive = false;
+    this.exit = { code, signal };
+    for (const l of this.exitListeners) l(this.exit);
   }
 }
 
@@ -274,6 +284,65 @@ test("bridge answers ping with pong", async () => {
   });
   await server.close();
   assert.equal(gotPong, true);
+});
+
+// --- PR5: PTY exit is broadcast to clients (bridge survives, doesn't die) ----
+
+test("PTY exit is broadcast as an `exit` frame to a connected client", async () => {
+  const session = new FakeSession();
+  session.emit("running"); // seq 1
+  const server = await startServer(session);
+
+  const exitFrame = await new Promise<ServerMessage | null>((resolve, reject) => {
+    const socket = new WebSocket(`ws://127.0.0.1:${server.port}`);
+    socket.on("open", () => {
+      socket.send(JSON.stringify({ type: "attach", lastSeq: 0 }));
+      // Once attached, simulate the underlying claude process exiting.
+      setTimeout(() => session.exitNow(0, undefined), 50);
+    });
+    socket.on("error", reject);
+    socket.on("message", (raw) => {
+      const msg = parseFrame(raw.toString("utf8"));
+      if (msg?.type === "exit") {
+        socket.close();
+        resolve(msg);
+      }
+    });
+    setTimeout(() => resolve(null), 2_000);
+  });
+
+  // The server is still up and answers HTTP after the PTY exit (it does NOT die);
+  // it keeps serving so the phone can see the [claude exited] notice.
+  const stillUp = await new Promise<boolean>((resolve) => {
+    const probe = new WebSocket(`ws://127.0.0.1:${server.port}`);
+    probe.on("open", () => {
+      probe.close();
+      resolve(true);
+    });
+    probe.on("error", () => resolve(false));
+    setTimeout(() => resolve(false), 1_000);
+  });
+  await server.close();
+
+  assert.ok(exitFrame && exitFrame.type === "exit");
+  assert.equal(exitFrame.code, 0);
+  assert.equal(stillUp, true);
+});
+
+test("a client attaching AFTER the PTY exited is told it exited", async () => {
+  const session = new FakeSession();
+  session.emit("done"); // seq 1
+  session.exitNow(3, undefined); // PTY already gone before anyone connects
+  const server = await startServer(session);
+
+  const { socket, frames } = await attachAndCollect(server.port, 0);
+  socket.close();
+  await server.close();
+
+  const ready = frames.find((f) => f?.type === "ready");
+  assert.ok(ready && ready.type === "ready" && ready.alive === false);
+  const exit = frames.find((f) => f?.type === "exit");
+  assert.ok(exit && exit.type === "exit" && exit.code === 3);
 });
 
 // --- PR3: static PWA served on the SAME port as the ws ----------------------
